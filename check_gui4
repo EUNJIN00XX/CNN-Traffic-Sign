@@ -1,0 +1,156 @@
+import torch
+import torch.nn as nn
+from torchvision import transforms
+from PIL import Image, ImageTk
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+
+
+CLASS_NAMES = ["crosswalk", "speedlimit", "stop", "trafficlight"]
+NUM_CLASSES = len(CLASS_NAMES)
+
+
+class CNN(nn.Module):
+    def __init__(self, num_classes):
+        super(CNN, self).__init__()
+        
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(64) ###
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2, 2)
+
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(128) ###
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(2, 2)
+
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(256)  ###
+        self.relu3 = nn.ReLU()
+        self.pool3 = nn.MaxPool2d(2, 2)
+
+
+
+  
+        self.fc1 = nn.Linear(256 * 8 * 8, 128)
+        self.relu4 = nn.ReLU()
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(128, num_classes)
+    
+        
+
+    def forward(self, x):
+        x = self.pool1(self.relu1(self.bn1(self.conv1(x))))
+        x = self.pool2(self.relu2(self.bn2(self.conv2(x))))
+        x = self.pool3(self.relu3(self.bn3(self.conv3(x))))   
+
+        x = x.view(x.size(0), -1)
+        x = self.relu4(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)  
+        return x
+
+
+def load_model(model_path="cnn4.pth", device=None):
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    chk = torch.load(model_path, map_location=device)
+
+    # 저장된 class_names 사용
+    saved_names = chk.get("class_names", CLASS_NAMES)
+
+    model = CNN(num_classes=len(saved_names))
+    model.load_state_dict(chk["model_state_dict"])
+    model.to(device)
+    model.eval()
+
+    return model, saved_names, device
+
+
+def predict_image(model, class_names, device, img):
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))
+    ])
+
+    x = transform(img).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        out = model(x)
+        probs = torch.softmax(out, dim=1)[0]
+
+    idx = torch.argmax(probs).item()
+    return class_names[idx], probs[idx].item(), probs.cpu().numpy()
+
+
+
+class App:
+    def __init__(self, root, model, class_names, device):
+        self.root = root
+        self.root.title("교통 표지판 인식 시스템")
+        self.root.geometry("400x500")
+
+        self.model = model
+        self.device = device
+        self.class_names = class_names
+
+        self.lbl_title = tk.Label(root, text="교통 표지판 분류기", font=("Arial", 20, "bold"))
+        self.lbl_title.pack(pady=20)
+
+        self.lbl_img = tk.Label(root)
+        self.lbl_img.pack(pady=10)
+
+        self.lbl_result = tk.Label(root, text="이미지를 선택해주세요", font=("Arial", 14))
+        self.lbl_result.pack(pady=20)
+
+        self.btn_load = tk.Button(root, text="이미지 불러오기",
+                                  command=self.load_img,
+                                  font=("Arial", 12),
+                                  bg="lightblue")
+        self.btn_load.pack(pady=10)
+
+    # 이미지 선택 후 표시 + 예측
+    def load_img(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Image Files", "*.jpg;*.png;*.jpeg")]
+        )
+        if not file_path:
+            return
+
+        try:
+            img_pil = Image.open(file_path).convert("RGB")
+            img_resized = img_pil.resize((200, 200))
+            img_tk = ImageTk.PhotoImage(img_resized)
+
+            self.lbl_img.config(image=img_tk)
+            self.lbl_img.image = img_tk
+
+            self.predict(img_pil)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"이미지 로드 실패: {e}")
+
+    # 예측 실행
+    def predict(self, img):
+        pred_cls, conf, probs = predict_image(
+            self.model, self.class_names, self.device, img
+        )
+
+        result = f"[예측 결과]\n표지판: {pred_cls}\n정확도: {conf*100:.2f}%"
+        self.lbl_result.config(text=result, fg="red")
+
+
+# ==========================
+# 🔹 MAIN
+# ==========================
+if __name__ == "__main__":
+    model_path = r"D:\Python\simp\cnn4.pth"
+
+    model, class_names, device = load_model(model_path)
+
+    root = tk.Tk()
+    app = App(root, model, class_names, device)
+    root.mainloop()
